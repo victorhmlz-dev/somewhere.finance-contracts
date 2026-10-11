@@ -1,0 +1,26 @@
+{
+  "name": "somewhere-finance-contracts",
+  "version": "0.1.0",
+  "description": "Somewhere Finance smart contracts (EVM)",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "build": "hardhat build",
+    "test": "hardhat test",
+    "clean": "hardhat clean"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.7",
+    "@types/node": "^26.6.5",
+    "hardhat": "^3.19.0",
+    "typescript": "^7.0.2",
+    "viem": "^2.57.4"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.6.1"
+  }
+}

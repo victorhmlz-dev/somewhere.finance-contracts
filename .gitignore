@@ -1,0 +1,16 @@
+# dependencies
+/node_modules
+
+# Hardhat output
+/artifacts
+/cache
+/dist
+/coverage
+
+# deployment state of local test networks
+/ignition/deployments/chain-31337
+
+# secrets
+.env
+.env.*
+!.env.example
