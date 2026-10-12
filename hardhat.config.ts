@@ -8,11 +8,13 @@ import hardhatToolboxViem from "@nomicfoundation/hardhat-toolbox-viem";
 // Testnet wallets, in this order. The first one deploys and is the default
 // sender of every transaction; the other two play users when a launch is
 // tried out by hand: one contributes, the other checks limits and refunds.
-// The same keys work on every EVM testnet.
+// The same keys work on every EVM testnet. What goes between the quotes is
+// the NAME under which each private key is stored in the keystore, never a
+// key or an address. The public address of each wallet is in its comment.
 const testnetAccounts = [
-  configVariable("DEPLOYER_PRIVATE_KEY"), //brave
-  configVariable("TEST_WALLET_1_PRIVATE_KEY"), //chrome
-  configVariable("TEST_WALLET_2_PRIVATE_KEY"), //opera
+  configVariable("DEPLOYER_PRIVATE_KEY"), // brave: 0xe7002ce14a6f77d2c1db1333DD565e27D773925D
+  configVariable("TEST_WALLET_1_PRIVATE_KEY"), // chrome: 0x3EC3A76DAE95ec7f7126049e7ABEa474404fc319
+  configVariable("TEST_WALLET_2_PRIVATE_KEY"), // opera: 0x53C46Bc3c1936E5153ec189A520492E1eEdb3CFB
 ];
 
 export default defineConfig({
@@ -24,6 +26,13 @@ export default defineConfig({
     },
   },
   networks: {
+    // The chain started by `npx hardhat node`, for developing the back and
+    // the front. It uses the node's own funded accounts.
+    localhost: {
+      type: "http",
+      chainType: "l1",
+      url: "http://127.0.0.1:8545",
+    },
     sepolia: {
       type: "http",
       chainType: "l1",

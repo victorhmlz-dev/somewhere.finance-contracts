@@ -1,9 +1,9 @@
 {
   "Launchpad": {
-    "owner": "REPLACE_WITH_DEPLOYER_ADDRESS",
+    "owner": "0xe7002ce14a6f77d2c1db1333DD565e27D773925D",
     "dexFactory": "0xF62c03E08ada871A0bEb309762E260a7a6a880E6",
     "weth": "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
-    "feeRecipient": "REPLACE_WITH_DEPLOYER_ADDRESS",
+    "feeRecipient": "0xe7002ce14a6f77d2c1db1333DD565e27D773925D",
     "feeBps": 50
   }
 }

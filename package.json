@@ -12,7 +12,9 @@
     "build": "hardhat build",
     "test": "hardhat test",
     "clean": "hardhat clean",
-    "test:fork": "hardhat test solidity test/LaunchpadFork.t.sol"
+    "test:fork": "hardhat test solidity test/LaunchpadFork.t.sol",
+    "node": "hardhat node",
+    "demo:local": "hardhat run scripts/local-demo.ts --network localhost"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox-viem": "^5.0.7",

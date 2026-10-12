@@ -26,6 +26,15 @@ Hay además una prueba contra el Uniswap V2 real de Sepolia. Trabaja sobre una c
 SEPOLIA_FORK_URL=https://ethereum-sepolia-rpc.publicnode.com npm run test:fork
 ```
 
+### Cadena local para desarrollar el back y el front
+
+```bash
+npm run node          # arranca una cadena local en http://127.0.0.1:8545; déjala abierta
+npm run demo:local    # en otra terminal: despliega el Launchpad y crea tres lanzamientos
+```
+
+`demo:local` deja un lanzamiento listado, uno en curso y uno por empezar, e imprime la línea de configuración que hay que pegar en el `.env` del back. Usa el doble del exchange y las cuentas públicas de Hardhat: nada de ahí tiene valor.
+
 ## Estructura
 
 ```
@@ -40,6 +49,7 @@ test/LaunchpadFuzz.t.sol       Tests con entradas aleatorias
 test/LaunchpadInvariant.t.sol  Propiedades que se cumplen tras cualquier secuencia de acciones
 test/LaunchpadFork.t.sol       Un lanzamiento completo contra el Uniswap V2 real de Sepolia
 ignition/                      Despliegue
+scripts/local-demo.ts          Lanzamientos de ejemplo en la cadena local
 docs/                          Arquitectura y decisiones
 ```
 
