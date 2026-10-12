@@ -79,3 +79,14 @@ contract RejectsNative {
         require(sent, "contribute failed");
     }
 }
+
+/// An exchange that refuses every new pair, to test a listing that cannot happen.
+contract RefusingFactory {
+    function getPair(address, address) external pure returns (address) {
+        return address(0);
+    }
+
+    function createPair(address, address) external pure returns (address) {
+        revert("PAIR_CREATION_DISABLED");
+    }
+}
