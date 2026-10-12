@@ -4,22 +4,31 @@ pragma solidity ^0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {CreatorVesting} from "./CreatorVesting.sol";
 import {IUniswapV2Factory, IUniswapV2Pair, IWETH} from "./interfaces/IUniswapV2.sol";
 
-/// @title Sale of one token launched on Somewhere
+/// @notice What a sale needs from the launchpad that created it.
+interface ILaunchpadFees {
+    function feeRecipient() external view returns (address);
+}
+
+/// @title Fixed-price sale of one token launched on Somewhere
 /// @notice Sells a token at a fixed price for the native currency of the
-/// chain. It holds the whole supply from the start and enforces the three
-/// rules of the launchpad itself:
+/// chain. It holds the whole supply from the start, and every rule below is
+/// fixed when the launch is created; nobody can change it afterwards.
 ///
-/// 1. The contract handles the liquidity, never the team. What is raised goes
-///    straight from here to the exchange.
-/// 2. The liquidity is locked. The pool tokens are sent to an address nobody
-///    controls, so the liquidity can never be withdrawn.
-/// 3. The creator receives a fixed share of the supply, capped at 1% when the
-///    launch is created (see `Launchpad`).
+/// When a sale succeeds, what was raised is split by the contract itself:
 ///
-/// The token is listed at the price it was sold for. If the sale ends below
-/// its minimum, nothing is listed and every contributor gets a full refund.
+/// - Liquidity, at least 70%: goes straight to the exchange, paired with
+///   tokens at the price of the sale. The pool tokens are sent to an address
+///   nobody controls, so the liquidity can never be withdrawn.
+/// - Platform fee: set aside for the platform to collect.
+/// - The rest: goes to the creator through a vesting contract, in monthly
+///   tranches, together with the creator's token allocation.
+///
+/// When a sale ends below its minimum, or cannot be listed within the grace
+/// period, nothing is listed, no fee is charged and every contributor gets a
+/// full refund.
 contract TokenSale is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -30,7 +39,8 @@ contract TokenSale is ReentrancyGuard {
         Live,
         /// The sale is over and reached its minimum; anyone can finalize it.
         Succeeded,
-        /// The sale is over below its minimum; contributors can get refunds.
+        /// Contributors can get refunds: the sale ended below its minimum, or
+        /// it succeeded but was not finalized within the grace period.
         Failed,
         /// Listed on the exchange; contributors can claim their tokens.
         Finalized
@@ -38,43 +48,60 @@ contract TokenSale is ReentrancyGuard {
 
     struct Config {
         IERC20 token;
-        /// Receives the creator allocation.
+        /// Beneficiary of the vesting.
         address creator;
-        /// Receives the platform fee.
-        address feeRecipient;
         IUniswapV2Factory dexFactory;
         /// Wrapped native currency the token is paired with.
         address weth;
         /// Tokens offered to contributors if the hard cap is reached.
         uint256 tokensForSale;
-        /// Tokens the creator receives when the sale is finalized.
+        /// Tokens the creator receives, through vesting, once the token is listed.
         uint256 creatorAllocation;
         /// Minimum to raise, in wei, for the sale to succeed.
         uint256 softCap;
         /// Maximum to raise, in wei. Reaching it ends the sale early.
         uint256 hardCap;
+        /// Least a wallet can have contributed, in wei. Zero for no minimum.
+        uint256 minContribution;
+        /// Most a wallet can contribute, in wei. Zero for no maximum.
+        uint256 maxContribution;
         uint64 startTime;
         uint64 endTime;
+        /// Share of what is raised that goes to liquidity, in basis points.
+        uint16 liquidityBps;
         /// Share of what is raised kept by the platform, in basis points.
         uint16 feeBps;
+        /// Monthly tranches of the creator's vesting.
+        uint8 vestingTranches;
     }
 
     uint256 private constant BPS = 10_000;
 
+    /// @notice How long anyone has to finalize a successful sale. After that
+    /// the sale counts as failed and contributors can get refunds, so funds
+    /// are never stuck if the exchange refuses the listing.
+    uint64 public constant FINALIZE_GRACE_PERIOD = 7 days;
+
     /// @notice Where locked pool tokens and unsold tokens go. Nobody holds its key.
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
+    /// @notice The launchpad that created this sale. Says who collects the fee.
+    address public immutable launchpad;
     IERC20 public immutable token;
     address public immutable creator;
-    address public immutable feeRecipient;
+    /// @notice Holds the creator's proceeds and tokens once the token is listed.
+    CreatorVesting public immutable vesting;
     IUniswapV2Factory public immutable dexFactory;
     address public immutable weth;
     uint256 public immutable tokensForSale;
     uint256 public immutable creatorAllocation;
     uint256 public immutable softCap;
     uint256 public immutable hardCap;
+    uint256 public immutable minContribution;
+    uint256 public immutable maxContribution;
     uint64 public immutable startTime;
     uint64 public immutable endTime;
+    uint16 public immutable liquidityBps;
     uint16 public immutable feeBps;
 
     /// @notice Total raised so far, in wei.
@@ -82,9 +109,13 @@ contract TokenSale is ReentrancyGuard {
     /// @notice What each address has contributed, in wei. Set back to zero
     /// when the address claims its tokens or its refund.
     mapping(address contributor => uint256 amount) public contributions;
+    /// @notice When the hard cap was reached. Zero if it has not been.
+    uint64 public hardCapReachedAt;
     bool public finalized;
     /// @notice The exchange pool of the token. Set when the sale is finalized.
     address public pair;
+    /// @notice Platform fee waiting to be collected, in wei.
+    uint256 public feeOwed;
 
     event Contributed(address indexed contributor, uint256 amount, uint256 totalRaised);
     event Finalized(
@@ -92,33 +123,41 @@ contract TokenSale is ReentrancyGuard {
         uint256 liquidityNative,
         uint256 liquidityTokens,
         uint256 liquidityLocked,
+        uint256 creatorNative,
         uint256 fee,
         uint256 tokensBurned
     );
     event Claimed(address indexed contributor, uint256 tokens);
     event Refunded(address indexed contributor, uint256 amount);
+    event FeeCollected(address indexed recipient, uint256 amount);
 
     error SaleNotLive();
     error SaleNotSucceeded();
     error SaleNotFailed();
     error SaleNotFinalized();
     error NothingToContribute();
+    error BelowMinContribution();
     error NothingToClaim();
+    error NothingToCollect();
     error NativeTransferFailed();
 
     constructor(Config memory config) {
+        launchpad = msg.sender;
         token = config.token;
         creator = config.creator;
-        feeRecipient = config.feeRecipient;
         dexFactory = config.dexFactory;
         weth = config.weth;
         tokensForSale = config.tokensForSale;
         creatorAllocation = config.creatorAllocation;
         softCap = config.softCap;
         hardCap = config.hardCap;
+        minContribution = config.minContribution;
+        maxContribution = config.maxContribution;
         startTime = config.startTime;
         endTime = config.endTime;
+        liquidityBps = config.liquidityBps;
         feeBps = config.feeBps;
+        vesting = new CreatorVesting(config.token, config.creator, config.vestingTranches);
     }
 
     /// @notice Sending native currency to the sale is contributing to it.
@@ -126,25 +165,29 @@ contract TokenSale is ReentrancyGuard {
         _contribute();
     }
 
-    /// @notice Buys tokens at the price of the sale. If the contribution
-    /// passes the hard cap, the part that does not fit is sent back.
+    /// @notice Buys tokens at the price of the sale. The part of the payment
+    /// that does not fit, under the hard cap or under the wallet's maximum,
+    /// is sent back in the same transaction.
     function contribute() external payable {
         _contribute();
     }
 
-    /// @notice Lists the token and locks the liquidity. Anyone can call it
-    /// once the sale has succeeded; nobody can choose not to.
+    /// @notice Lists the token, locks the liquidity and starts the creator's
+    /// vesting. Anyone can call it once the sale has succeeded.
     function finalize() external nonReentrant {
         if (status() != Status.Succeeded) revert SaleNotSucceeded();
         finalized = true;
 
         uint256 raised = totalRaised;
         uint256 fee = (raised * feeBps) / BPS;
-        uint256 liquidityNative = raised - fee;
+        uint256 liquidityNative = (raised * liquidityBps) / BPS;
+        uint256 creatorNative = raised - liquidityNative - fee;
         uint256 tokensSold = tokensFor(raised);
         // Same ratio of tokens to native currency as in the sale, so the token
         // starts trading at the price contributors paid.
-        uint256 liquidityTokens = (tokensSold * liquidityNative) / raised;
+        uint256 liquidityTokens = (tokensSold * liquidityBps) / BPS;
+
+        feeOwed = fee;
 
         // The pair is funded directly instead of through the exchange router:
         // the router refuses to add liquidity to a pair that somebody created
@@ -158,15 +201,22 @@ contract TokenSale is ReentrancyGuard {
         if (!IWETH(weth).transfer(pair_, liquidityNative)) revert NativeTransferFailed();
         uint256 liquidityLocked = IUniswapV2Pair(pair_).mint(DEAD);
 
-        if (creatorAllocation > 0) token.safeTransfer(creator, creatorAllocation);
+        if (creatorAllocation > 0) token.safeTransfer(address(vesting), creatorAllocation);
+        vesting.start{value: creatorNative}(creatorAllocation);
 
         // Whatever is not owed to contributors is taken out of circulation.
         uint256 tokensBurned = token.balanceOf(address(this)) - tokensSold;
         if (tokensBurned > 0) token.safeTransfer(DEAD, tokensBurned);
 
-        if (fee > 0) _sendNative(feeRecipient, fee);
-
-        emit Finalized(pair_, liquidityNative, liquidityTokens, liquidityLocked, fee, tokensBurned);
+        emit Finalized(
+            pair_,
+            liquidityNative,
+            liquidityTokens,
+            liquidityLocked,
+            creatorNative,
+            fee,
+            tokensBurned
+        );
     }
 
     /// @notice Sends the caller the tokens bought, once the token is listed.
@@ -194,6 +244,19 @@ contract TokenSale is ReentrancyGuard {
         emit Refunded(msg.sender, contribution);
     }
 
+    /// @notice Sends the platform its fee. Anyone can call it; the fee goes to
+    /// whoever the launchpad names at that moment. A failure here affects
+    /// nothing else: listing, claims and vesting never depend on it.
+    function collectFee() external nonReentrant {
+        uint256 amount = feeOwed;
+        if (amount == 0) revert NothingToCollect();
+        feeOwed = 0;
+
+        address recipient = ILaunchpadFees(launchpad).feeRecipient();
+        _sendNative(recipient, amount);
+        emit FeeCollected(recipient, amount);
+    }
+
     /// @notice Tokens bought with `amount` wei.
     function tokensFor(uint256 amount) public view returns (uint256) {
         return (amount * tokensForSale) / hardCap;
@@ -202,20 +265,44 @@ contract TokenSale is ReentrancyGuard {
     function status() public view returns (Status) {
         if (finalized) return Status.Finalized;
         if (block.timestamp < startTime) return Status.Upcoming;
-        if (totalRaised == hardCap) return Status.Succeeded;
-        if (block.timestamp < endTime) return Status.Live;
-        return totalRaised >= softCap ? Status.Succeeded : Status.Failed;
+
+        uint256 succeededAt;
+        if (hardCapReachedAt != 0) {
+            succeededAt = hardCapReachedAt;
+        } else if (block.timestamp < endTime) {
+            return Status.Live;
+        } else if (totalRaised >= softCap) {
+            succeededAt = endTime;
+        } else {
+            return Status.Failed;
+        }
+
+        return
+            block.timestamp < succeededAt + FINALIZE_GRACE_PERIOD
+                ? Status.Succeeded
+                : Status.Failed;
     }
 
     function _contribute() private nonReentrant {
         if (status() != Status.Live) revert SaleNotLive();
 
-        uint256 remaining = hardCap - totalRaised;
-        uint256 amount = msg.value > remaining ? remaining : msg.value;
+        uint256 contributed = contributions[msg.sender];
+        uint256 room = hardCap - totalRaised;
+        if (maxContribution != 0) {
+            uint256 walletRoom = maxContribution > contributed ? maxContribution - contributed : 0;
+            if (walletRoom < room) room = walletRoom;
+        }
+        uint256 amount = msg.value > room ? room : msg.value;
         if (amount == 0) revert NothingToContribute();
 
-        contributions[msg.sender] += amount;
+        contributed += amount;
         totalRaised += amount;
+        // The contribution that fills the sale may be smaller than the minimum.
+        if (contributed < minContribution && totalRaised < hardCap) {
+            revert BelowMinContribution();
+        }
+        contributions[msg.sender] = contributed;
+        if (totalRaised == hardCap) hardCapReachedAt = uint64(block.timestamp);
         emit Contributed(msg.sender, amount, totalRaised);
 
         if (msg.value > amount) _sendNative(msg.sender, msg.value - amount);
