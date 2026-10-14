@@ -36,19 +36,19 @@ export default defineConfig({
     sepolia: {
       type: "http",
       chainType: "l1",
-      url: configVariable("https://eth-sepolia.g.alchemy.com/v2/alch_I2nIQongfdJU_EUGSRB6r"),
+      url: configVariable("SEPOLIA_RPC_URL"),
       accounts: testnetAccounts,
     },
     bscTestnet: {
       type: "http",
       chainType: "l1",
-      url: configVariable("https://bnb-testnet.g.alchemy.com/v2/alch_I2nIQongfdJU_EUGSRB6r"),
+      url: configVariable("BSC_TESTNET_RPC_URL"),
       accounts: testnetAccounts,
     },
     robinhoodTestnet: {
       type: "http",
       chainType: "generic",
-      url: configVariable("https://robinhood-testnet.g.alchemy.com/v2/alch_I2nIQongfdJU_EUGSRB6r"),
+      url: configVariable("ROBINHOOD_TESTNET_RPC_URL"),
       accounts: testnetAccounts,
     },
   },

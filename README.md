@@ -146,6 +146,14 @@ Tomadas de la [página oficial de despliegues](https://developers.uniswap.org/do
 
 La moneda nativa envuelta de Sepolia es `0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14`, leída del propio router de Uniswap. La de las otras redes está por confirmar, igual que las fábricas de sus testnets.
 
+## Despliegues
+
+| Red | Launchpad | Bloque | Fecha |
+|---|---|---|---|
+| Ethereum Sepolia | `0x83c968b3E5EeBaaBe78a6f5f9235207d942804e1` | 11915040 | 2026-10-14 |
+
+Dueña y receptora de comisiones en Sepolia: la wallet de despliegue de pruebas, `0xe7002ce14a6f77d2c1db1333DD565e27D773925D`. El registro completo del despliegue está en `ignition/deployments/chain-11155111/`.
+
 ## Pendiente antes de una red real
 
 - Desplegar y probar a mano en Sepolia.
