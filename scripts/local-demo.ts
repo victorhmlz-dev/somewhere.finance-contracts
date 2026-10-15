@@ -88,12 +88,13 @@ await cancelled.sale.write.cancel({ account: creator.account });
 console.log("Launchpad deployed at", launchpad.address);
 console.log("\nTo index it, add this line to the .env of somewhere.finance-back:\n");
 console.log(
-  `EVM_CHAINS=${JSON.stringify([
+  `CHAINS=${JSON.stringify([
     {
       key: "local",
+      family: "evm",
       chainId: 31337,
       name: "Local",
-      nativeSymbol: "ETH",
+      nativeCurrency: { symbol: "ETH", name: "Ether", decimals: 18 },
       rpcUrl: "http://127.0.0.1:8545",
       launchpad: launchpad.address,
       startBlock: Number(deployBlock),
