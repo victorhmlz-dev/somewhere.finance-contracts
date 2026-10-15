@@ -1,5 +1,5 @@
-// Fills the local chain (`npm run node`) with a launchpad and a few launches
-// in different states, to develop the back and the front against.
+// Fills the local chain (`npm run node`) with a v2 and a v3 launchpad and a
+// few launches in different states, to develop the back and the front against.
 //
 //   npm run node          (in one terminal, leave it running)
 //   npm run demo:local    (in another)
@@ -7,11 +7,12 @@
 // Everything here is throwaway: the exchange is the test double and the
 // accounts are the public ones every Hardhat node starts with.
 import { network } from "hardhat";
-import { parseEther } from "viem";
+import { parseEther, parseUnits } from "viem";
 
 const { viem, networkHelpers } = await network.create();
 const publicClient = await viem.getPublicClient();
-const [deployer, creator, alice, bob] = await viem.getWalletClients();
+const wallets = await viem.getWalletClients();
+const [deployer, creator, alice, bob] = wallets;
 
 const weth = await viem.deployContract("MockWETH");
 const dexFactory = await viem.deployContract("MockFactory");
@@ -85,7 +86,91 @@ await createLaunch("Neon Credits", "NEON", 2n * DAY);
 const cancelled = await createLaunch("Drift Coin", "DRIFT", 3n * DAY);
 await cancelled.sale.write.cancel({ account: creator.account });
 
-console.log("Launchpad deployed at", launchpad.address);
+// The v3 launchpad, next to the v2 one: launches paired with any asset it
+// allows. Here, a test dollar with 6 decimals and the native currency.
+const v3Block = await publicClient.getBlockNumber();
+const saleImplementation = await viem.deployContract("TokenSaleV3");
+const vestingImplementation = await viem.deployContract("CreatorVestingV3");
+const launchpadV3 = await viem.deployContract("LaunchpadV3", [
+  deployer.account.address,
+  dexFactory.address,
+  weth.address,
+  saleImplementation.address,
+  vestingImplementation.address,
+  deployer.account.address,
+  50,
+]);
+const dollar = await viem.deployContract("MockStablecoin");
+const usd = (amount: string) => parseUnits(amount, 6);
+await launchpadV3.write.setQuoteAsset([dollar.address, true, usd("10")]);
+await launchpadV3.write.setQuoteAsset([weth.address, true, parseEther("0.01")]);
+// Every test account gets test dollars to buy with from the browser
+for (const wallet of wallets) {
+  await dollar.write.mint([wallet.account.address, usd("100000")]);
+}
+
+async function createV3Launch(
+  name: string,
+  symbol: string,
+  quoteAsset: `0x${string}`,
+  startsIn: bigint,
+  caps: { softCap: bigint; hardCap: bigint },
+) {
+  const now = BigInt(await networkHelpers.time.latest());
+  const launchId = await launchpadV3.read.launchCount();
+  await launchpadV3.write.createLaunch(
+    [
+      {
+        name,
+        symbol,
+        totalSupply: parseEther("1000000"),
+        quoteAsset,
+        softCap: caps.softCap,
+        hardCap: caps.hardCap,
+        minContribution: 0n,
+        maxContribution: 0n,
+        startTime: now + startsIn,
+        endTime: now + startsIn + 7n * DAY,
+        creatorAllocationBps: 100,
+        liquidityBps: 7000,
+        vestingTranches: 3,
+        requiredTier: 0,
+      },
+    ],
+    { account: creator.account },
+  );
+  const launch = await launchpadV3.read.getLaunch([launchId]);
+  return {
+    startTime: now + startsIn,
+    sale: await viem.getContractAt("TokenSaleV3", launch.sale),
+  };
+}
+
+// 5. Paired with the test dollar, live.
+const dollarLaunch = await createV3Launch("Orbit Token", "ORBIT", dollar.address, 5n, {
+  softCap: usd("2000"),
+  hardCap: usd("10000"),
+});
+await networkHelpers.time.increaseTo(dollarLaunch.startTime);
+for (const [wallet, amount] of [
+  [alice, usd("3000")],
+  [bob, usd("1500")],
+] as const) {
+  await dollar.write.approve([dollarLaunch.sale.address, amount], { account: wallet.account });
+  await dollarLaunch.sale.write.contribute([amount, { tier: 0, expiresAt: 0n, signature: "0x" }], {
+    account: wallet.account,
+  });
+}
+
+// 6. Paired with the native currency on v3, upcoming.
+await createV3Launch("Pulse Token", "PULSE", weth.address, 2n * DAY, {
+  softCap: parseEther("2"),
+  hardCap: parseEther("10"),
+});
+
+console.log("Launchpad v2 deployed at", launchpad.address);
+console.log("Launchpad v3 deployed at", launchpadV3.address);
+console.log("Test dollar (MUSD, 6 decimals) at", dollar.address);
 console.log("\nTo index it, add this line to the .env of somewhere.finance-back:\n");
 console.log(
   `CHAINS=${JSON.stringify([
@@ -96,8 +181,13 @@ console.log(
       name: "Local",
       nativeCurrency: { symbol: "ETH", name: "Ether", decimals: 18 },
       rpcUrl: "http://127.0.0.1:8545",
-      launchpad: launchpad.address,
-      startBlock: Number(deployBlock),
+      launchpads: [
+        { address: launchpad.address, version: 2, startBlock: Number(deployBlock) },
+        { address: launchpadV3.address, version: 3, startBlock: Number(v3Block) },
+      ],
+      assets: [
+        { address: dollar.address, kind: "stablecoin", issuer: "Somewhere test", canFreeze: false },
+      ],
       confirmations: 0,
     },
   ])}`,

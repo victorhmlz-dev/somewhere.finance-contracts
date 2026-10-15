@@ -16,6 +16,12 @@ contract MockWETH is ERC20 {
     function deposit() external payable {
         _mint(msg.sender, msg.value);
     }
+
+    function withdraw(uint256 value) external {
+        _burn(msg.sender, value);
+        (bool sent, ) = msg.sender.call{value: value}("");
+        require(sent, "WITHDRAW_FAILED");
+    }
 }
 
 contract MockPair is ERC20 {

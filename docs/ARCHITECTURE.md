@@ -350,3 +350,31 @@ No se ha hecho: análisis estático, despliegue en testnet ni auditoría externa
 Cancelación antes del inicio (D17, 2026-10-15): `TokenSale.cancel()`, estado `Cancelled` y evento `Cancelled(tokensBurned)`. Tests: 4 unitarios nuevos y la invariante 13, con la cancelación entre las acciones aleatorias del test de invariantes. Total: 55 unitarios, 7 de fuzzing y 10 invariantes. Exige un despliegue nuevo; la v1 de Sepolia no la tiene.
 
 Margen de tamaño: `Launchpad` ocupa 18.830 de los 24.576 bytes que admite la red. Si crece mucho más habrá que separar la creación de contratos.
+
+## 13. Launchpad v3 (2026-10-16)
+
+Decisiones aprobadas por el usuario el 2026-10-16 (ver también `HANDOFF-backend.md`, decisiones 13 a 15):
+
+| # | Decisión |
+|---|---|
+| D18 | El par de cada lanzamiento es un activo que la plataforma permite en esa red, con su propio mínimo de `softCap`. La moneda nativa entra como su versión envuelta: una sola contabilidad en ERC-20 |
+| D19 | Ventas y vestings como clones EIP-1167 de implementaciones desplegadas aparte. Los valores que eran `immutable` pasan a almacenamiento escrito una sola vez en `initialize` |
+| D20 | Ticker reservado por Launchpad, de 1 a 10 caracteres A–Z/0–9, liberable cuando la venta se cancela o falla. Entre redes, lo comprueba el back |
+| D21 | `isOfficial`/`saleOf` en la cadena |
+| D22 | `requiredTier` con declaraciones EIP-712 firmadas por el `attestor` de la plataforma |
+| D23 | Ante el emisor de un activo: no se lista si falta dinero (`QuoteShortfall`) y los reembolsos reparten la pérdida a prorrata |
+
+Comprobaciones previas en la red (2026-10-16), leyendo Robinhood Chain:
+
+- Las acciones tokenizadas de Robinhood aplican splits y dividendos con un multiplicador de pantalla (`uiMultiplier`, `balanceOfUI`); `balanceOf` no cambia. La venta cuenta en unidades reales sin problema; para mostrar acciones hay que multiplicar por `uiMultiplier`.
+- El emisor tiene `adminBurn(address,uint256)`, `pause` y lista de bloqueo, y los tokens admiten `permit`.
+- Uniswap V2 está desplegado y en uso (fábrica y router en el README).
+
+Invariantes nuevas, en `test/LaunchpadV3Invariant.t.sol`, con el par en un activo cuyo emisor pausa y quema al azar:
+
+14. Antes del listado, todo lo recaudado está en la venta, se devolvió en un reembolso o lo quemó el emisor; sin quemas, la venta tiene exactamente lo que debe.
+15. El ticker sigue reservado salvo que la venta se haya cancelado o haya fallado.
+
+Las invariantes 1 a 13 se repiten para la v3. Pruebas: 30 unitarias (`test/LaunchpadV3.ts`) y 11 invariantes con 256 secuencias cada una. Se comprobó que las secuencias aleatorias llegan al listado, a los cobros, a reembolsos tras una quema, a la cancelación, a la liberación del ticker y al pago del vesting. Total del proyecto: 102 tests.
+
+Pendiente de la v3: prueba de lanzamiento completo contra el Uniswap real de Robinhood Chain con USDG y una acción tokenizada; análisis estático; despliegue en Sepolia; conectarla al back (varios Launchpad por red, eventos nuevos, `Refunded` con dos importes) y al front (aprobación o `permit`, selector de activos); auditoría externa.

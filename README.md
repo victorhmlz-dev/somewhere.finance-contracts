@@ -33,18 +33,23 @@ npm run node          # arranca una cadena local en http://127.0.0.1:8545; déja
 npm run demo:local    # en otra terminal: despliega el Launchpad y crea cuatro lanzamientos
 ```
 
-`demo:local` deja un lanzamiento listado, uno en curso, uno por empezar y uno cancelado, e imprime la línea de configuración que hay que pegar en el `.env` del back. Usa el doble del exchange y las cuentas públicas de Hardhat: nada de ahí tiene valor.
+`demo:local` despliega un Launchpad v2 y uno v3 y una stablecoin de prueba (MUSD, 6 decimales, repartida a todas las cuentas). Deja en la v2 un lanzamiento listado, uno en curso, uno por empezar y uno cancelado, y en la v3 uno en MUSD en curso y uno en ETH por empezar. Imprime la línea `CHAINS=…` que hay que pegar en el `.env` del back. Usa el doble del exchange y las cuentas públicas de Hardhat: nada de ahí tiene valor.
 
 ## Estructura
 
 ```
-contracts/Launchpad.sol        Crea los lanzamientos y fija sus límites
-contracts/TokenSale.sol        La venta de un token: contribuciones, listado, reembolsos
-contracts/CreatorVesting.sol   Lo que se le debe al creador, liberado por tramos mensuales
+contracts/Launchpad.sol        Crea los lanzamientos y fija sus límites (v2, desplegada)
+contracts/TokenSale.sol        La venta de un token: contribuciones, listado, reembolsos (v2)
+contracts/CreatorVesting.sol   Lo que se le debe al creador, liberado por tramos mensuales (v2)
+contracts/LaunchpadV3.sol      v3: pares con cualquier activo permitido, tickers, tokens oficiales
+contracts/TokenSaleV3.sol      v3: la venta, clonada para cada lanzamiento
+contracts/CreatorVestingV3.sol v3: el vesting, clonado para cada lanzamiento
 contracts/LaunchToken.sol      El token que se lanza: un ERC-20 de supply fijo
 contracts/interfaces/          Lo que se usa del exchange (Uniswap V2 y compatibles)
-contracts/test/                Dobles del exchange, solo para los tests
+contracts/test/                Dobles del exchange y de activos con emisor, solo para los tests
 test/Launchpad.ts              Tests unitarios
+test/LaunchpadV3.ts            Tests unitarios de la v3
+test/LaunchpadV3Invariant.t.sol Propiedades de la v3, también ante pausas y quemas del emisor
 test/LaunchpadFuzz.t.sol       Tests con entradas aleatorias
 test/LaunchpadInvariant.t.sol  Propiedades que se cumplen tras cualquier secuencia de acciones
 test/LaunchpadFork.t.sol       Un lanzamiento completo contra el Uniswap V2 real de Sepolia
@@ -118,6 +123,23 @@ No tiene ningún poder sobre un lanzamiento ya creado ni sobre sus fondos, y no 
 | Tramos de vesting | De 3 a 48 |
 | Mínimo y máximo por wallet | Opcionales. El mínimo se mide sobre el total aportado por la wallet |
 
+## Somewhere Launchpad v3: pares con cualquier activo
+
+La v3 mantiene las reglas de la v2 (liquidez bloqueada, 1% como máximo para el creador, vesting, comisión de hasta el 1%, reembolsos, cancelación antes del inicio) y añade:
+
+- **Par con cualquier activo permitido.** El creador elige con qué se compra y se empareja su token: una stablecoin (USDC, o USDG en Robinhood Chain), una acción tokenizada, otra cripto o la moneda nativa a través de su versión envuelta. La dueña permite cada activo con `setQuoteAsset`, con su propio mínimo de `softCap`; quitar un activo solo afecta a lanzamientos nuevos.
+- **Tres formas de aportar.** `contribute(amount, proof)` tras aprobar el gasto; `contributeWithPermit` con una firma EIP-2612 (USDC, USDG y las acciones de Robinhood la admiten); `contributeNative(proof)` cuando el par es la moneda nativa, que la venta envuelve. Solo se cobra lo que cabe. Los tokens que entregan menos de lo enviado (con comisión por transferencia) se rechazan.
+- **Pagos en moneda nativa con respaldo.** Si el par es la moneda nativa, reembolsos, comisión y vesting se pagan en ella; a una dirección que no puede recibirla se le paga la versión envuelta, para que nada quede atascado.
+- **Activos con emisor.** Una pausa solo retrasa: si dura más que el plazo de gracia, la venta pasa a reembolsos, que funcionan en cuanto el emisor la levanta. Una dirección bloqueada solo afecta a esa persona. Si el emisor quema fondos de la venta (`adminBurn` en las acciones de Robinhood), no se lista y los reembolsos reparten la pérdida a prorrata en lugar de dejar sin nada a los últimos (`Refunded(contributor, contribution, amount)`).
+- **Tickers.** De 1 a 10 caracteres A–Z y 0–9. Un ticker solo puede tenerlo un lanzamiento a la vez en cada Launchpad; se libera con `releaseTicker(launchId)` cuando ese lanzamiento se cancela o falla. `isTickerAvailable(symbol)` lo consulta.
+- **Tokens oficiales.** `isOfficial(token)` y `saleOf(token)` dicen si un token salió de este Launchpad.
+- **Niveles de verificación.** Un lanzamiento puede exigir un nivel (`requiredTier`). Quien compra presenta una declaración firmada por el `attestor` que nombra la plataforma (EIP-712: cuenta, nivel y caducidad). La verificación la hace un tercero; a la cadena solo llega el nivel. Con nivel 0, como en la v2, compra cualquiera.
+- **Clones.** Cada venta y cada vesting es un clon mínimo (EIP-1167) de una implementación desplegada aparte; las implementaciones no se pueden inicializar. `LaunchpadV3` ocupa 12.975 bytes, `TokenSaleV3` 9.113 y `CreatorVestingV3` 3.271.
+
+En la v3, la dueña puede además permitir o retirar activos para lanzamientos futuros y nombrar o retirar el `attestor`. Retirarlo detiene las compras de los lanzamientos que exigen nivel; si no se nombra otro a tiempo, esas ventas fallan y todos recuperan su aportación.
+
+Despliegue de la v3: `npx hardhat ignition deploy ignition/modules/LaunchpadV3.ts --network <red> --parameters <archivo> --deployment-id <red>-v3`, con un archivo como `ignition/parameters/example-v3.json`. Después, la dueña permite cada activo con `npx hardhat run scripts/allow-quote-assets.ts --network <red>`, que lee la lista de `ignition/parameters/<red>-v3-quote-assets.json` (en Sepolia: ETH y el USDC de Circle, `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`).
+
 ## Lo que estas reglas no garantizan
 
 - Que un token valga algo o conserve su precio.
@@ -146,9 +168,9 @@ Tomadas de la [página oficial de despliegues](https://developers.uniswap.org/do
 | Ethereum Sepolia | `0xF62c03E08ada871A0bEb309762E260a7a6a880E6` | Probada con `npm run test:fork` |
 | Ethereum | `0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f` | Sin probar |
 | BNB Chain | `0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6` | Sin probar |
-| Robinhood Chain | `0x8bceaa40b9acdfaedf85adf4ff01f5ad6517937f` | Sin probar |
+| Robinhood Chain | `0x8bceaa40b9acdfaedf85adf4ff01f5ad6517937f` | Leída en la red el 2026-10-16: su router (`0x89e5db8b5aa49aa85ac63f691524311aeb649eba`) apunta a ella y tiene más de 115.000 pares. Sin prueba de lanzamiento completo |
 
-La moneda nativa envuelta de Sepolia es `0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14`, leída del propio router de Uniswap. La de las otras redes está por confirmar, igual que las fábricas de sus testnets.
+La moneda nativa envuelta de Sepolia es `0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14` y la de Robinhood Chain `0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73`, leídas de los routers de Uniswap. La de las otras redes está por confirmar, igual que las fábricas de sus testnets. La stablecoin nativa de Robinhood Chain es USDG (`0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168`, 6 decimales), no USDC.
 
 ## Despliegues
 
@@ -162,6 +184,7 @@ Dueña y receptora de comisiones en Sepolia: la wallet de despliegue de pruebas,
 ## Pendiente antes de una red real
 
 - Desplegar y probar a mano en Sepolia.
-- Repetir la prueba contra el exchange real en BNB Chain y Robinhood Chain.
+- Repetir la prueba contra el exchange real en BNB Chain y Robinhood Chain, y hacerla para la v3 con USDC/USDG y una acción tokenizada.
+- Desplegar la v3 en Sepolia y conectarla al back y al front.
 - Análisis estático con Slither.
 - Auditoría externa.
