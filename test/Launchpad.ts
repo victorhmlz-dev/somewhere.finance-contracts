@@ -12,7 +12,7 @@ const DAY = 24n * HOUR;
 const MONTH = 30n * DAY;
 const GRACE_PERIOD = 7n * DAY;
 const BPS = 10_000n;
-const STATUS = { Upcoming: 0, Live: 1, Succeeded: 2, Failed: 3, Finalized: 4 };
+const STATUS = { Upcoming: 0, Live: 1, Succeeded: 2, Failed: 3, Finalized: 4, Cancelled: 5 };
 
 const FEE_BPS = 50; // 0.5%
 const LIQUIDITY_BPS = 7000; // 70%
@@ -547,6 +547,84 @@ describe("Launchpad", () => {
       assert.equal(await weth.read.balanceOf([pairAddress]), parseEther("8"));
       assert.equal(await pair.read.balanceOf([stranger.account.address]), 0n);
       assert.equal(await pair.read.balanceOf([DEAD]), await pair.read.totalSupply());
+    });
+  });
+
+  describe("cancelling a launch", () => {
+    it("lets the creator call it off before it starts, burning the whole supply", async () => {
+      const { sale, token, creator } = await networkHelpers.loadFixture(deployLaunch);
+
+      await viem.assertions.emitWithArgs(
+        sale.write.cancel({ account: creator.account }),
+        sale,
+        "Cancelled",
+        [TOTAL_SUPPLY],
+      );
+
+      assert.equal(await sale.read.status(), STATUS.Cancelled);
+      assert.equal(await token.read.balanceOf([sale.address]), 0n);
+      assert.equal(await token.read.balanceOf([DEAD]), TOTAL_SUPPLY);
+      assert.equal(await token.read.balanceOf([creator.account.address]), 0n);
+    });
+
+    it("can only be done by the creator", async () => {
+      const { sale, stranger, owner } = await networkHelpers.loadFixture(deployLaunch);
+
+      for (const caller of [stranger, owner]) {
+        await viem.assertions.revertWithCustomError(
+          sale.write.cancel({ account: caller.account }),
+          sale,
+          "NotCreator",
+        );
+      }
+      assert.equal(await sale.read.status(), STATUS.Upcoming);
+    });
+
+    it("is impossible once the sale has started, whatever happened since", async () => {
+      const { sale, creator, alice, params } = await networkHelpers.loadFixture(deployLaunch);
+
+      await networkHelpers.time.increaseTo(params.startTime);
+      await viem.assertions.revertWithCustomError(
+        sale.write.cancel({ account: creator.account }),
+        sale,
+        "SaleNotUpcoming",
+      );
+
+      await sale.write.contribute({ account: alice.account, value: parseEther("1") });
+      await networkHelpers.time.increaseTo(params.endTime);
+      assert.equal(await sale.read.status(), STATUS.Failed);
+      await viem.assertions.revertWithCustomError(
+        sale.write.cancel({ account: creator.account }),
+        sale,
+        "SaleNotUpcoming",
+      );
+    });
+
+    it("leaves nothing to do afterwards, ever", async () => {
+      const { sale, creator, alice, params } = await networkHelpers.loadFixture(deployLaunch);
+      await sale.write.cancel({ account: creator.account });
+
+      await networkHelpers.time.increaseTo(params.startTime);
+      assert.equal(await sale.read.status(), STATUS.Cancelled);
+      await viem.assertions.revertWithCustomError(
+        sale.write.contribute({ account: alice.account, value: parseEther("1") }),
+        sale,
+        "SaleNotLive",
+      );
+      await viem.assertions.revertWithCustomError(
+        sale.write.cancel({ account: creator.account }),
+        sale,
+        "SaleNotUpcoming",
+      );
+
+      await networkHelpers.time.increase(365n * DAY);
+      assert.equal(await sale.read.status(), STATUS.Cancelled);
+      await viem.assertions.revertWithCustomError(sale.write.finalize(), sale, "SaleNotSucceeded");
+      await viem.assertions.revertWithCustomError(
+        sale.write.refund({ account: alice.account }),
+        sale,
+        "SaleNotFailed",
+      );
     });
   });
 

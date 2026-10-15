@@ -81,6 +81,10 @@ await live.sale.write.contribute({ account: bob.account, value: parseEther("2") 
 // 3. Upcoming: opens in two days.
 await createLaunch("Neon Credits", "NEON", 2n * DAY);
 
+// 4. Cancelled by its creator before it opened.
+const cancelled = await createLaunch("Drift Coin", "DRIFT", 3n * DAY);
+await cancelled.sale.write.cancel({ account: creator.account });
+
 console.log("Launchpad deployed at", launchpad.address);
 console.log("\nTo index it, add this line to the .env of somewhere.finance-back:\n");
 console.log(

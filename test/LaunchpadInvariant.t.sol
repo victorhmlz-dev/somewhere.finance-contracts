@@ -15,6 +15,7 @@ import {LaunchpadFixture} from "./LaunchpadFuzz.t.sol";
 contract LaunchHandler is Test {
     TokenSale public immutable sale;
     CreatorVesting public immutable vesting;
+    address public immutable creator;
     address[] public actors;
 
     // What the handler has seen happen, to compare against the contracts.
@@ -23,11 +24,15 @@ contract LaunchHandler is Test {
     mapping(address actor => bool) public claimed;
     bool public sawFinalized;
     bool public sawFailed;
+    bool public sawCancelled;
     bool public leftFinalState;
+    /// Whether someone other than the creator, or after the start, managed to cancel.
+    bool public cancelledWrongly;
 
-    constructor(TokenSale sale_, address[] memory actors_) {
+    constructor(TokenSale sale_, address creator_, address[] memory actors_) {
         sale = sale_;
         vesting = sale_.vesting();
+        creator = creator_;
         actors = actors_;
     }
 
@@ -71,6 +76,18 @@ contract LaunchHandler is Test {
         _observe();
     }
 
+    /// Rarely the creator, so most sequences still get to the sale itself;
+    /// otherwise somebody who must not be able to.
+    function cancel(uint256 callerSeed) external {
+        address caller = callerSeed % 8 == 0 ? creator : actors[callerSeed % actors.length];
+        bool wasUpcoming = sale.status() == TokenSale.Status.Upcoming;
+        vm.prank(caller);
+        try sale.cancel() {
+            if (caller != creator || !wasUpcoming) cancelledWrongly = true;
+        } catch {}
+        _observe();
+    }
+
     function collectFee() external {
         try sale.collectFee() {} catch {}
         _observe();
@@ -90,8 +107,10 @@ contract LaunchHandler is Test {
         TokenSale.Status status = sale.status();
         if (sawFinalized && status != TokenSale.Status.Finalized) leftFinalState = true;
         if (sawFailed && status != TokenSale.Status.Failed) leftFinalState = true;
+        if (sawCancelled && status != TokenSale.Status.Cancelled) leftFinalState = true;
         if (status == TokenSale.Status.Finalized) sawFinalized = true;
         if (status == TokenSale.Status.Failed) sawFailed = true;
+        if (status == TokenSale.Status.Cancelled) sawCancelled = true;
     }
 }
 
@@ -108,14 +127,14 @@ contract LaunchpadInvariantTest is LaunchpadFixture {
         params.maxContribution = 5 ether;
         d = createLaunch(params);
         totalSupply = params.totalSupply;
-        vm.warp(params.startTime);
+        // Starts before the sale opens, so the sequences include cancelling it
 
         address[] memory actors = new address[](4);
         actors[0] = makeAddr("alice");
         actors[1] = makeAddr("bob");
         actors[2] = makeAddr("carol");
         actors[3] = makeAddr("dave");
-        handler = new LaunchHandler(d.sale, actors);
+        handler = new LaunchHandler(d.sale, creator, actors);
         targetContract(address(handler));
     }
 
@@ -166,10 +185,22 @@ contract LaunchpadInvariantTest is LaunchpadFixture {
         }
     }
 
-    /// A finalized or failed sale never becomes anything else.
+    /// A finalized, failed or cancelled sale never becomes anything else.
     function invariant_FinalStatesAreFinal() public view {
         assertFalse(handler.leftFinalState());
         assertFalse(handler.sawFinalized() && handler.sawFailed());
+        assertFalse(handler.sawCancelled() && (handler.sawFinalized() || handler.sawFailed()));
+    }
+
+    /// Only the creator can cancel, only before the start, and a cancelled
+    /// sale took no money and burned every token.
+    function invariant_CancelOnlyBeforeAnyMoney() public view {
+        assertFalse(handler.cancelledWrongly());
+        if (!d.sale.cancelled()) return;
+        assertEq(d.sale.totalRaised(), 0);
+        assertEq(address(d.sale).balance, 0);
+        assertEq(d.token.balanceOf(address(d.sale)), 0);
+        assertEq(d.token.balanceOf(DEAD), totalSupply);
     }
 
     /// Once listed, the liquidity belongs to nobody and at least 70% of the

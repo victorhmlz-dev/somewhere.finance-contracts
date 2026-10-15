@@ -4,7 +4,7 @@ Contratos inteligentes de Somewhere Finance para lanzar tokens fungibles en las 
 
 Solana usa otro lenguaje y otro modelo; sus programas irán en un proyecto aparte.
 
-**Estado: en desarrollo y sin auditar.** Solo se ha ejecutado en la red simulada de Hardhat. No debe desplegarse en una red con dinero real hasta pasar una auditoría externa.
+**Estado: en desarrollo y sin auditar.** Desplegado solo en Sepolia, una red de pruebas. No debe desplegarse en una red con dinero real hasta pasar una auditoría externa.
 
 El diseño, el modelo de amenazas, las invariantes y las decisiones pendientes están en [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -30,10 +30,10 @@ SEPOLIA_FORK_URL=https://ethereum-sepolia-rpc.publicnode.com npm run test:fork
 
 ```bash
 npm run node          # arranca una cadena local en http://127.0.0.1:8545; déjala abierta
-npm run demo:local    # en otra terminal: despliega el Launchpad y crea tres lanzamientos
+npm run demo:local    # en otra terminal: despliega el Launchpad y crea cuatro lanzamientos
 ```
 
-`demo:local` deja un lanzamiento listado, uno en curso y uno por empezar, e imprime la línea de configuración que hay que pegar en el `.env` del back. Usa el doble del exchange y las cuentas públicas de Hardhat: nada de ahí tiene valor.
+`demo:local` deja un lanzamiento listado, uno en curso, uno por empezar y uno cancelado, e imprime la línea de configuración que hay que pegar en el `.env` del back. Usa el doble del exchange y las cuentas públicas de Hardhat: nada de ahí tiene valor.
 
 ## Estructura
 
@@ -67,6 +67,7 @@ Cualquiera puede crear un lanzamiento llamando a `Launchpad.createLaunch`. Cada 
 | Cobro del creador (dinero y tokens) | Por tramos mensuales iguales, mínimo 3 y máximo 48; el primero a los 30 días del listado |
 | Comisión de la plataforma | 0,5% de lo recaudado hoy; nunca más del 1% |
 | Venta fallida | Reembolso íntegro, sin comisión |
+| Cancelación | Solo el creador y solo antes de que empiece la venta; se quema todo el supply |
 | Supply | Fijo; nadie puede acuñar más |
 
 ### Reparto de lo recaudado
@@ -92,6 +93,7 @@ El precio sale de dividir el máximo a recaudar (`hardCap`) entre los tokens en 
 | `Succeeded` | Se alcanzó el `hardCap`, o llegó `endTime` con al menos el `softCap`. Cualquiera puede llamar a `finalize` durante 7 días |
 | `Finalized` | El token está listado. Cada contribuyente retira sus tokens con `claim` y empieza el vesting del creador |
 | `Failed` | Llegó `endTime` sin alcanzar el `softCap`, o pasaron los 7 días sin que la venta se pudiera listar. Cada contribuyente recupera todo con `refund` |
+| `Cancelled` | El creador llamó a `cancel` antes de `startTime`. Nadie pudo aportar todavía, así que no hay nada que devolver; todo el supply va a `0x…dEaD` y el token nunca cotiza. Es definitivo |
 
 Los 7 días de gracia existen para que el dinero nunca quede atrapado: si el exchange rechaza el listado, la venta pasa a fallida sola, sin que nadie tenga que intervenir. **Una venta exitosa hay que finalizarla dentro de ese plazo**; conviene que el backend lo haga automáticamente.
 
@@ -102,7 +104,7 @@ La dueña del `Launchpad` solo puede:
 - Cambiar la comisión de los lanzamientos futuros, nunca por encima del 1%.
 - Cambiar la dirección que cobra las comisiones.
 
-No tiene ningún poder sobre un lanzamiento ya creado ni sobre sus fondos, y no puede pausar ni cancelar ventas. No hay proxies ni actualizaciones: una versión nueva del protocolo es un despliegue nuevo y los lanzamientos anteriores conservan sus reglas.
+No tiene ningún poder sobre un lanzamiento ya creado ni sobre sus fondos, y no puede pausar ni cancelar ventas. Cancelar solo lo puede el creador de cada lanzamiento, y solo antes de que empiece. No hay proxies ni actualizaciones: una versión nueva del protocolo es un despliegue nuevo y los lanzamientos anteriores conservan sus reglas.
 
 ### Límites de un lanzamiento
 
@@ -129,7 +131,9 @@ El `Launchpad` se despliega una vez por cadena, con el exchange y la moneda nati
 
 1. Prepara el archivo de parámetros de la red. El de Sepolia ya existe (`ignition/parameters/sepolia.json`): solo hay que poner en `owner` y `feeRecipient` la dirección pública de la wallet de despliegue. Para otra red, copia `example.json`. `dexFactory` es la fábrica de pares del exchange y `weth` la moneda nativa envuelta; **tómalas de la documentación oficial del exchange**, porque una dirección equivocada dejaría la liquidez de todos los lanzamientos en el contrato equivocado.
 2. Guarda cifradas la URL del nodo y las tres claves de testnet, con `npx hardhat keystore set <NOMBRE>`: `SEPOLIA_RPC_URL`, `DEPLOYER_PRIVATE_KEY` (despliega y es la cuenta por defecto), `TEST_WALLET_1_PRIVATE_KEY` y `TEST_WALLET_2_PRIVATE_KEY` (hacen de usuarios en las pruebas manuales).
-3. Despliega: `npx hardhat ignition deploy ignition/modules/Launchpad.ts --network sepolia --parameters ignition/parameters/sepolia.json`.
+3. Despliega: `npx hardhat ignition deploy ignition/modules/Launchpad.ts --network sepolia --parameters ignition/parameters/sepolia.json --deployment-id sepolia-v2`.
+
+`--deployment-id` da a cada versión su propio registro en `ignition/deployments/`. Para desplegar una versión nueva de los contratos se usa un id nuevo (`sepolia-v3`…), y el registro de las anteriores se conserva. El primer despliegue de Sepolia, sin id, está en `chain-11155111/`.
 
 Las redes configuradas están en `hardhat.config.ts`: `sepolia`, `bscTestnet` y `robinhoodTestnet`.
 
@@ -148,11 +152,12 @@ La moneda nativa envuelta de Sepolia es `0xfFf9976782d46CC05630D1f6eBAb18b2324d6
 
 ## Despliegues
 
-| Red | Launchpad | Bloque | Fecha |
-|---|---|---|---|
-| Ethereum Sepolia | `0x83c968b3E5EeBaaBe78a6f5f9235207d942804e1` | 11915040 | 2026-10-14 |
+| Red | Versión | Launchpad | Bloque | Fecha |
+|---|---|---|---|---|
+| Ethereum Sepolia | v2, con cancelación antes del inicio | `0xB393ef85b97f9A0391cC612Eb97707E7078E0261` | 11916640 | 2026-10-15 |
+| Ethereum Sepolia | v1, sustituida | `0x83c968b3E5EeBaaBe78a6f5f9235207d942804e1` | 11915040 | 2026-10-14 |
 
-Dueña y receptora de comisiones en Sepolia: la wallet de despliegue de pruebas, `0xe7002ce14a6f77d2c1db1333DD565e27D773925D`. El registro completo del despliegue está en `ignition/deployments/chain-11155111/`.
+Dueña y receptora de comisiones en Sepolia: la wallet de despliegue de pruebas, `0xe7002ce14a6f77d2c1db1333DD565e27D773925D`. El registro de la v2 está en `ignition/deployments/sepolia-v2/` y el de la v1 en `ignition/deployments/chain-11155111/`. Sus lanzamientos siguen funcionando con sus reglas, pero la web solo muestra los del Launchpad configurado en el back.
 
 ## Pendiente antes de una red real
 

@@ -29,6 +29,10 @@ interface ILaunchpadFees {
 /// When a sale ends below its minimum, or cannot be listed within the grace
 /// period, nothing is listed, no fee is charged and every contributor gets a
 /// full refund.
+///
+/// Before the sale starts, and only then, the creator can cancel it. Nobody
+/// can have contributed yet, so nobody loses anything; the whole supply is
+/// burned and the token never trades.
 contract TokenSale is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -43,7 +47,9 @@ contract TokenSale is ReentrancyGuard {
         /// it succeeded but was not finalized within the grace period.
         Failed,
         /// Listed on the exchange; contributors can claim their tokens.
-        Finalized
+        Finalized,
+        /// Cancelled by the creator before it started. Nothing can happen anymore.
+        Cancelled
     }
 
     struct Config {
@@ -112,6 +118,7 @@ contract TokenSale is ReentrancyGuard {
     /// @notice When the hard cap was reached. Zero if it has not been.
     uint64 public hardCapReachedAt;
     bool public finalized;
+    bool public cancelled;
     /// @notice The exchange pool of the token. Set when the sale is finalized.
     address public pair;
     /// @notice Platform fee waiting to be collected, in wei.
@@ -130,6 +137,7 @@ contract TokenSale is ReentrancyGuard {
     event Claimed(address indexed contributor, uint256 tokens);
     event Refunded(address indexed contributor, uint256 amount);
     event FeeCollected(address indexed recipient, uint256 amount);
+    event Cancelled(uint256 tokensBurned);
 
     error SaleNotLive();
     error SaleNotSucceeded();
@@ -140,6 +148,8 @@ contract TokenSale is ReentrancyGuard {
     error NothingToClaim();
     error NothingToCollect();
     error NativeTransferFailed();
+    error NotCreator();
+    error SaleNotUpcoming();
 
     constructor(Config memory config) {
         launchpad = msg.sender;
@@ -219,6 +229,18 @@ contract TokenSale is ReentrancyGuard {
         );
     }
 
+    /// @notice Calls the launch off, for its creator, while the sale has not
+    /// started. The whole supply is burned, the creator's share included.
+    function cancel() external nonReentrant {
+        if (msg.sender != creator) revert NotCreator();
+        if (status() != Status.Upcoming) revert SaleNotUpcoming();
+        cancelled = true;
+
+        uint256 tokensBurned = token.balanceOf(address(this));
+        token.safeTransfer(DEAD, tokensBurned);
+        emit Cancelled(tokensBurned);
+    }
+
     /// @notice Sends the caller the tokens bought, once the token is listed.
     function claim() external nonReentrant {
         if (!finalized) revert SaleNotFinalized();
@@ -263,6 +285,7 @@ contract TokenSale is ReentrancyGuard {
     }
 
     function status() public view returns (Status) {
+        if (cancelled) return Status.Cancelled;
         if (finalized) return Status.Finalized;
         if (block.timestamp < startTime) return Status.Upcoming;
 

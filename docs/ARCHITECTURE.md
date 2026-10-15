@@ -153,8 +153,10 @@ stateDiagram-v2
     Live --> Failed: llega endTime sin softCap
     Succeeded --> Finalized: finalize (cualquiera)
     Succeeded --> Failed: pasa el plazo de gracia sin poder finalizar
+    Upcoming --> Cancelled: cancel (solo el creador)
     Finalized --> [*]
     Failed --> [*]
+    Cancelled --> [*]
 ```
 
 La transición nueva es de `Succeeded` a `Failed`: si una venta exitosa no se consigue finalizar en un plazo de gracia tras su fin (**propuesta**: 7 días), pasa a fallida y todos pueden pedir el reembolso. Resuelve H2 sin dar a nadie un poder discrecional: `finalize` sigue siendo de libre llamada, así que el plazo solo vence si el exchange lo impide.
@@ -200,9 +202,10 @@ Se escribirán como tests de invariantes antes de dar por buena la implementaci�
 7. En una venta fallida, la suma de reembolsos posibles es igual al saldo del contrato.
 8. La suma de tokens reclamables nunca supera los tokens que la venta conserva.
 9. Nadie retira tokens ni reembolso dos veces.
-10. Una venta finalizada o fallida no vuelve a ningún otro estado.
+10. Una venta finalizada, fallida o cancelada no vuelve a ningún otro estado.
 11. El vesting nunca libera más de lo que corresponde a los tramos vencidos, ni a otro beneficiario.
 12. Ningún parámetro de un lanzamiento cambia tras crearlo.
+13. Solo el creador cancela, solo antes del inicio; una venta cancelada no recaudó nada y quemó todo el supply.
 
 ## 5. Modelo de amenazas
 
@@ -292,6 +295,12 @@ No bloquean todavía:
 | D15 | Vinculación de varias wallets y recuperación de cuentas |
 | D16 | Instalar Slither para el análisis estático |
 
+Aprobada el 2026-10-15:
+
+| # | Decisión | Resultado |
+|---|---|---|
+| D17 | ¿Puede el creador cancelar un lanzamiento? | Solo antes de que empiece la venta. En ese momento nadie ha aportado, así que no hay nada que devolver; se quema todo el supply. Con la venta en marcha no se puede, para que nadie cancele según le convenga |
+
 ## 11. Orden de implementación recomendado
 
 1. Launchpad: comisión con tope del 1% y cobro a disposición (H1, H4), cotas mínimas (H6).
@@ -338,4 +347,6 @@ Sobre el hallazgo H8: la página oficial de Uniswap lista una fábrica V2 en Rob
 
 No se ha hecho: análisis estático, despliegue en testnet ni auditoría externa.
 
-Margen de tamaño: `Launchpad` ocupa 18.283 de los 24.576 bytes que admite la red. Si crece mucho más habrá que separar la creación de contratos.
+Cancelación antes del inicio (D17, 2026-10-15): `TokenSale.cancel()`, estado `Cancelled` y evento `Cancelled(tokensBurned)`. Tests: 4 unitarios nuevos y la invariante 13, con la cancelación entre las acciones aleatorias del test de invariantes. Total: 55 unitarios, 7 de fuzzing y 10 invariantes. Exige un despliegue nuevo; la v1 de Sepolia no la tiene.
+
+Margen de tamaño: `Launchpad` ocupa 18.830 de los 24.576 bytes que admite la red. Si crece mucho más habrá que separar la creación de contratos.
