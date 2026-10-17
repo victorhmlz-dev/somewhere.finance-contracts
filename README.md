@@ -176,15 +176,16 @@ La moneda nativa envuelta de Sepolia es `0xfFf9976782d46CC05630D1f6eBAb18b2324d6
 
 | Red | Versión | Launchpad | Bloque | Fecha |
 |---|---|---|---|---|
+| Ethereum Sepolia | v3, pares con ETH y USDC | `0x0EB8Cd03C0544943C1256bbFfF61A44155C32B97` | 11923771 | 2026-10-16 |
 | Ethereum Sepolia | v2, con cancelación antes del inicio | `0xB393ef85b97f9A0391cC612Eb97707E7078E0261` | 11916640 | 2026-10-15 |
 | Ethereum Sepolia | v1, sustituida | `0x83c968b3E5EeBaaBe78a6f5f9235207d942804e1` | 11915040 | 2026-10-14 |
 
-Dueña y receptora de comisiones en Sepolia: la wallet de despliegue de pruebas, `0xe7002ce14a6f77d2c1db1333DD565e27D773925D`. El registro de la v2 está en `ignition/deployments/sepolia-v2/` y el de la v1 en `ignition/deployments/chain-11155111/`. Sus lanzamientos siguen funcionando con sus reglas, pero la web solo muestra los del Launchpad configurado en el back.
+Dueña y receptora de comisiones en Sepolia: la wallet de despliegue de pruebas, `0xe7002ce14a6f77d2c1db1333DD565e27D773925D`. La v3 usa las implementaciones `TokenSaleV3` `0x729b5e36C684160E2e6C8289267DD6cce6F72a1F` y `CreatorVestingV3` `0xc50171D8561d5a2ebfa70dC05817f8502715d714`, y permite ETH (mínimo 0,01) y el USDC de Circle (mínimo 10); su registro está en `ignition/deployments/sepolia-v3/`. Un primer intento dejó una implementación de vesting sin usar en `0x940eff5e9ac7e6425291bfd9d5aead125d9789cd`, que no está conectada a nada. El registro de la v2 está en `ignition/deployments/sepolia-v2/` y el de la v1 en `ignition/deployments/chain-11155111/`. Sus lanzamientos siguen funcionando con sus reglas, pero la web solo muestra los del Launchpad configurado en el back.
 
 ## Pendiente antes de una red real
 
 - Desplegar y probar a mano en Sepolia.
 - Repetir la prueba contra el exchange real en BNB Chain y Robinhood Chain, y hacerla para la v3 con USDC/USDG y una acción tokenizada.
-- Desplegar la v3 en Sepolia y conectarla al back y al front.
+- Probar a mano la v3 en Sepolia con USDC y ETH.
 - Análisis estático con Slither.
 - Auditoría externa.
